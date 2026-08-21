@@ -1,9 +1,0 @@
-streamlit
-yfinance
-pandas
-plotly
-ta
-streamlit-searchbox
-yahooquery
-requests-cache
-requests
