@@ -217,7 +217,6 @@ def get_eur_exchange_rate(currency):
         if not fx_data.empty:
             return float(fx_data['Close'].iloc[-1])
         
-        # Fallback invertiert
         inv_pair = f"EUR{currency.upper()}=X"
         inv_ticker = yf.Ticker(inv_pair)
         inv_data = inv_ticker.history(period="1d")
@@ -371,7 +370,7 @@ def generate_pdf_report(symbol, company_name, current_price, fair_value, score, 
     return buffer
 
 # ==========================================
-# SEITENLEISTE: NAVIGATION & FAVORITEN (MIT EUR-KURS & TAGESVERÄNDERUNG)
+# SEITENLEISTE: NAVIGATION & FAVORITEN
 # ==========================================
 st.sidebar.markdown("## 🤑 GEILEPROFITE")
 
@@ -423,7 +422,6 @@ if st.session_state.watchlist:
 # ==========================================
 if main_nav == "📊 Aktien-Analyse":
     
-    # UNTERNEHMENSSUCHE
     col_search1, col_search2 = st.columns([3, 1])
     
     with col_search1:
@@ -468,7 +466,6 @@ if main_nav == "📊 Aktien-Analyse":
             currency_code = info.get('currency', 'USD').upper()
             curr_symbol = "$" if currency_code == "USD" else ("€" if currency_code == "EUR" else currency_code)
             
-            # Umrechnungskurs ermitteln
             eur_rate = get_eur_exchange_rate(currency_code)
 
             st.markdown(f"## {company_name} <span style='color:#8b949e; font-size: 20px;'>({info.get('symbol', ticker_symbol)})</span>", unsafe_allow_html=True)
@@ -644,7 +641,6 @@ if main_nav == "📊 Aktien-Analyse":
             with tab_chart:
                 st.subheader("Kursverlauf & Indikatoren")
                 
-                # Auswahl von Zeitraum und Intervall
                 col_tf1, col_tf2 = st.columns(2)
                 with col_tf1:
                     timeframe = st.selectbox(
@@ -655,13 +651,13 @@ if main_nav == "📊 Aktien-Analyse":
                 with col_tf2:
                     if timeframe == "1d":
                         interval_options = ["1m", "2m", "5m", "15m", "30m", "60m"]
-                        default_idx = 2  # 5m
+                        default_idx = 2
                     elif timeframe == "5d":
                         interval_options = ["5m", "15m", "30m", "60m", "1d"]
-                        default_idx = 1  # 15m
+                        default_idx = 1
                     else:
                         interval_options = ["1d", "1wk", "1mo"]
-                        default_idx = 0  # 1d
+                        default_idx = 0
                         
                     interval = st.selectbox("Intervall (Auflösung):", interval_options, index=default_idx)
 
@@ -753,13 +749,54 @@ if main_nav == "📊 Aktien-Analyse":
                 a_col3.metric("Ziel Schnitt", f"{t_mean:.2f} {curr_symbol}" if isinstance(t_mean, (int, float)) else str(t_mean), delta=f"~ {t_mean*eur_rate:.2f} €" if isinstance(t_mean, (int, float)) else None)
                 a_col4.metric("Ziel Hoch", f"{t_high:.2f} {curr_symbol}" if isinstance(t_high, (int, float)) else str(t_high), delta=f"~ {t_high*eur_rate:.2f} €" if isinstance(t_high, (int, float)) else None)
 
+            # ==========================================
+            # KORRIGIERTER TAB: DIVIDENDEN
+            # ==========================================
             with tab_dividends:
+                st.subheader("💰 Dividenden-Analyse")
                 div_yield = (info.get('dividendYield', 0) or 0) * 100
+                div_rate = info.get('dividendRate', 0) or 0
                 payout_ratio = (info.get('payoutRatio', 0) or 0) * 100
-                st.metric("Dividendenrendite", f"{div_yield:.2f}%")
-                st.metric("Ausschüttungsquote", f"{payout_ratio:.2f}%")
+                
+                div_col1, div_col2, div_col3, div_col4 = st.columns(4)
+                
+                div_col1.metric("Dividendenrendite", f"{div_yield:.2f}%")
+                
+                div_rate_eur = div_rate * eur_rate
+                if currency_code != "EUR":
+                    div_col2.metric("Dividende / Aktie p.a.", f"{div_rate:.2f} {curr_symbol}", delta=f"~ {div_rate_eur:.2f} €")
+                else:
+                    div_col2.metric("Dividende / Aktie p.a.", f"{div_rate:.2f} €")
+                    
+                div_col3.metric("Ausschüttungsquote", f"{payout_ratio:.2f}%")
+                
+                # Beispielrechnung basierend auf 1.000 € oder Positionsgröße
+                sample_shares = 100
+                est_payout_eur = sample_shares * div_rate_eur
+                div_col4.metric(f"Ertrag bei {sample_shares} Stk.", f"{est_payout_eur:.2f} € / Jahr")
+
                 if not dividends_data.empty:
-                    st.line_chart(dividends_data.tail(20))
+                    st.markdown("#### 📜 Historische Dividendenzahlungen (pro Aktie)")
+                    div_df = dividends_data.tail(20).to_frame(name="Ausschüttung")
+                    div_df['Ausschüttung (EUR)'] = div_df['Ausschüttung'] * eur_rate
+                    
+                    fig_div = go.Figure()
+                    fig_div.add_trace(go.Bar(
+                        x=div_df.index, 
+                        y=div_df['Ausschüttung (EUR)'], 
+                        name="Dividende (€)",
+                        marker_color="#2ea043"
+                    ))
+                    fig_div.update_layout(
+                        template="plotly_dark", 
+                        height=350, 
+                        paper_bgcolor='rgba(0,0,0,0)', 
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        yaxis_title="Betrag in €"
+                    )
+                    st.plotly_chart(fig_div, use_container_width=True)
+                else:
+                    st.info("Dieses Unternehmen schüttet aktuell keine Dividende aus.")
 
             with tab_peers:
                 peer_input = st.text_input("Peers eingeben:", value=f"{ticker_symbol}, MSFT, GOOGL, NVDA")
@@ -783,13 +820,46 @@ if main_nav == "📊 Aktien-Analyse":
                         except Exception: continue
                     st.dataframe(pd.DataFrame(peer_data), use_container_width=True)
 
+            # ==========================================
+            # KORRIGIERTER TAB: NEWS & TERMINE
+            # ==========================================
             with tab_news:
+                st.subheader("📅 Anstehende Termine & Quartalszahlen (Earnings)")
+                
+                # Prüfe auf Termindaten
+                if calendar_data is not None and not (isinstance(calendar_data, pd.DataFrame) and calendar_data.empty):
+                    try:
+                        cal_dict = calendar_data if isinstance(calendar_data, dict) else calendar_data.to_dict()
+                        
+                        e_date = cal_dict.get('Earnings Date', ['N/A'])[0] if isinstance(cal_dict.get('Earnings Date'), list) else cal_dict.get('Earnings Date', 'N/A')
+                        eps_avg = cal_dict.get('Earnings Average', 'N/A')
+                        rev_avg = cal_dict.get('Revenue Average', 'N/A')
+                        
+                        col_cal1, col_cal2, col_cal3 = st.columns(3)
+                        col_cal1.metric("Nächstes Earnings Date", str(e_date))
+                        col_cal2.metric("Erwarteter EPS (Schnitt)", str(eps_avg))
+                        
+                        if isinstance(rev_avg, (int, float)):
+                            col_cal3.metric("Erwarteter Umsatz", f"{rev_avg / 1e9:.2f} B {curr_symbol}")
+                        else:
+                            col_cal3.metric("Erwarteter Umsatz", str(rev_avg))
+                            
+                    except Exception as e:
+                        st.info("Keine detaillierten Termindaten über API abrufbar.")
+                else:
+                    st.info("Aktuell stehen keine bevorstehenden Termine oder Veröffentlichungstermine fest.")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.subheader("📰 Aktuelle Unternehmens-News")
+                
                 if news_data:
                     for item in news_data[:5]:
                         c = item.get('content', {})
                         st.markdown(f"**[{c.get('title', 'Titel')}]({c.get('canonicalUrl', {}).get('url', '#')})**")
                         st.caption(f"Quelle: {c.get('provider', {}).get('displayName', 'N/A')}")
                         st.markdown("---")
+                else:
+                    st.info("Keine aktuellen Nachrichten verfügbar.")
 
             with tab_signals:
                 st.write(f"**Score:** {score} / {max_score}")
@@ -808,7 +878,7 @@ if main_nav == "📊 Aktien-Analyse":
             st.error(f"Fehler beim Laden von {ticker_symbol}: {e}")
 
 # ==========================================
-# FENSTER 2: WATCHLIST MANAGER (MIT EURO-UMRECHNUNG & TAGESVERÄNDERUNG)
+# FENSTER 2: WATCHLIST MANAGER
 # ==========================================
 elif main_nav == "⭐ Watchlist":
     st.markdown("## ⭐ Watchlist Manager")
@@ -876,7 +946,7 @@ elif main_nav == "⭐ Watchlist":
         st.info("Deine Watchlist ist aktuell leer.")
 
 # ==========================================
-# FENSTER 3: AKTIEN-SCREENER (MIT DAY-TRADING & EINSTIEGS-SIGNALEN)
+# FENSTER 3: AKTIEN-SCREENER
 # ==========================================
 elif main_nav == "🔍 Aktien-Screener":
     st.markdown("## 🔍 Aktien-Screener & Tages-Einstiege")
@@ -995,7 +1065,6 @@ elif main_nav == "🌐 Markt & Zukunft":
 
     with st.spinner("Lade globale Marktdaten..."):
         try:
-            # 1. Indizes Daten abrufen
             sp500 = yf.Ticker("^GSPC").history(period="1y")
             vix = yf.Ticker("^VIX").history(period="1d")
             dax = yf.Ticker("^GDAXI").history(period="1y")
@@ -1005,7 +1074,6 @@ elif main_nav == "🌐 Markt & Zukunft":
             vix_level = vix['Close'].iloc[-1] if not vix.empty else 20.0
             sp500_rsi = ta.momentum.rsi(sp500['Close'], window=14).iloc[-1]
 
-            # 2. Fear & Greed Index (0 - 100) berechnen
             vix_score = max(0, min(100, (35 - vix_level) * 4))
             rsi_score = sp500_rsi
             mom_diff = ((last_sp500 - sp500_sma200) / sp500_sma200) * 100
@@ -1024,7 +1092,6 @@ elif main_nav == "🌐 Markt & Zukunft":
             else:
                 fg_status = "🔥 Extreme Gier (Extreme Greed)"
 
-            # 3. Makro-Kacheln
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
             
             with col_m1:
@@ -1048,7 +1115,6 @@ elif main_nav == "🌐 Markt & Zukunft":
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # 4. Markt-Synthese & Ausblick
             st.markdown("### 🔮 Makro-Zukunftsausblick")
             
             if fg_index <= 25:
@@ -1072,7 +1138,6 @@ elif main_nav == "🌐 Markt & Zukunft":
 
             st.markdown("---")
 
-            # 5. Sektor-Rotations-Vergleich
             st.markdown("### 📊 Sektor-Rotation (Performance 1 Monat)")
             
             sector_data = []
