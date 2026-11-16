@@ -4,17 +4,18 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import ta
-import time
 import io
-import datetime
+from concurrent.futures import ThreadPoolExecutor
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# Seiten-Konfiguration
+# ==========================================
+# SEITEN-KONFIGURATION
+# ==========================================
 st.set_page_config(
-    page_title="GEILEPROFITE | Aktienanalyse", 
+    page_title="GEILEPROFITE | Aktienanalyse",
     page_icon="🤑",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -25,20 +26,15 @@ st.set_page_config(
 # ==========================================
 st.markdown("""
 <style>
-    /* Haupt-Hintergrund und Schriften */
     .stApp {
         background-color: #0e1117;
         color: #e6edf3;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
-    
-    /* Sidebar Styling */
     section[data-testid="stSidebar"] {
         background-color: #161b22;
         border-right: 1px solid #21262d;
     }
-
-    /* Metric Cards - Dezent und flach */
     div[data-testid="stMetric"] {
         background: #161b22;
         border: 1px solid #30363d;
@@ -46,19 +42,15 @@ st.markdown("""
         padding: 14px 16px;
         box-shadow: none;
         transition: border-color 0.15s ease;
-        
         min-height: 110px !important;
         height: 110px !important;
         display: flex;
         flex-direction: column;
         justify-content: center;
     }
-    
     div[data-testid="stMetric"]:hover {
         border-color: #8b949e;
     }
-    
-    /* Native Container (z.B. PDF-Export Kasten) */
     div[data-testid="stVerticalBlockBorderWrapper"] > div {
         min-height: 110px !important;
         height: 110px !important;
@@ -70,8 +62,6 @@ st.markdown("""
         justify-content: center;
         padding: 12px !important;
     }
-    
-    /* Executive Banner Cards - Schlichter Accent-Border */
     .banner-card {
         background: #161b22;
         border: 1px solid #30363d;
@@ -98,7 +88,6 @@ st.markdown("""
     .banner-card-warning { border-left: 3px solid #d29922; }
     .banner-card-danger { border-left: 3px solid #f85149; }
 
-    /* Clean Tabs Navigation */
     .stTabs [data-baseweb="tab-list"] {
         gap: 4px;
         border-bottom: 1px solid #21262d;
@@ -118,8 +107,6 @@ st.markdown("""
         border-bottom-color: #f0f6fc !important;
         font-weight: 600;
     }
-
-    /* Schlichte Buttons */
     .stButton > button {
         background-color: #21262d;
         color: #c9d1d9;
@@ -136,8 +123,6 @@ st.markdown("""
         color: #ffffff;
         box-shadow: none;
     }
-    
-    /* Typografie Dezent halten */
     h1, h2, h3 {
         color: #f0f6fc !important;
         font-weight: 600 !important;
@@ -146,40 +131,43 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ==========================================
+# KONSTANTEN & PRESETS
+# ==========================================
 SCREENER_LISTS = {
     "US Big Tech & Growth": [
-        "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD", "NFLX", "INTC", 
+        "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AMD", "NFLX", "INTC",
         "CRM", "ORCL", "PLTR", "AVGO", "AMAT", "NOW", "UBER", "ABNB", "PANW", "SNOW"
     ],
     "Nasdaq 100 Focus": [
-        "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AVGO", "COST", "ASML", 
-        "AZN", "AMD", "PEP", "LIN", "NFLX", "ADBE", "TMUS", "CSCO", "PDD", "INTC", 
+        "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "AVGO", "COST", "ASML",
+        "AZN", "AMD", "PEP", "LIN", "NFLX", "ADBE", "TMUS", "CSCO", "PDD", "INTC",
         "QCOM", "TXN", "CMCSA", "AMGN", "INTU", "HON", "AMAT", "BKNG", "ISRG", "ADP"
     ],
     "S&P 500 Top Pick Mix": [
-        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "BRK-B", "JNJ", "JPM", "V", 
-        "PG", "UNH", "HD", "MA", "DIS", "ABBV", "BAC", "CVX", "LLY", "MRK", 
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "BRK-B", "JNJ", "JPM", "V",
+        "PG", "UNH", "HD", "MA", "DIS", "ABBV", "BAC", "CVX", "LLY", "MRK",
         "PFE", "KO", "PEP", "TMO", "WMT", "MCD", "CSCO", "XOM", "COST", "CAT"
     ],
     "DAX 40 (Deutschland)": [
-        "SAP.DE", "SIE.DE", "ALV.DE", "DTE.DE", "MBG.DE", "BMW.DE", "VOW3.DE", "BAS.DE", 
-        "RHM.DE", "BAYN.DE", "AIR.DE", "DTG.DE", "MUV2.DE", "IFX.DE", "DHL.DE", "DB1.DE", 
+        "SAP.DE", "SIE.DE", "ALV.DE", "DTE.DE", "MBG.DE", "BMW.DE", "VOW3.DE", "BAS.DE",
+        "RHM.DE", "BAYN.DE", "AIR.DE", "DTG.DE", "MUV2.DE", "IFX.DE", "DHL.DE", "DB1.DE",
         "SY1.DE", "BEI.DE", "CON.DE", "EON.DE", "HEI.DE", "HEN3.DE", "MRK.DE", "QIAG.DE"
     ],
     "MDAX & Mid-Caps (DE)": [
-        "P911.DE", "LHA.DE", "EVT.DE", "HFG.DE", "TKAG.DE", "FPE3.DE", "BOSS.DE", "G1A.DE", 
-        "AIXA.DE", "NEM.DE", "SRT3.DE", "HAG.DE", "ENR.DE", "SOW.DE", "DEQ.DE"
+        "P911.DE", "LHA.DE", "EVT.DE", "HFG.DE", "TKAG.DE", "FPE3.DE", "BOSS.DE", "G1A.DE",
+        "AIXA.DE", "NEM.DE", "SRT3.DE", "HAG.DE", "ENR.DE", "DEQ.DE"
     ],
     "Euro Stoxx 50 (Europa)": [
-        "ASML.AS", "MC.PA", "SAP.DE", "OR.PA", "TTE.PA", "SIE.DE", "ALV.DE", "SU.PA", 
+        "ASML.AS", "MC.PA", "SAP.DE", "OR.PA", "TTE.PA", "SIE.DE", "ALV.DE", "SU.PA",
         "SAN.MC", "SAN.PA", "CDI.PA", "IBE.MC", "BNP.PA", "AIR.PA", "ENEL.MI", "BBVA.MC"
     ],
     "Dividenden-Aristokraten": [
-        "JNJ", "PG", "KO", "PEP", "MMM", "ABBV", "CVX", "XOM", "TGT", "LOW", 
-        "EMR", "ITW", "O", "ADP", "GD", "MCD", "WMT", "NOK", "CL"
+        "JNJ", "PG", "KO", "PEP", "MMM", "ABBV", "CVX", "XOM", "TGT", "LOW",
+        "EMR", "ITW", "O", "ADP", "GD", "MCD", "WMT", "CL"
     ],
     "Cybersecurity & AI Tech": [
-        "NVDA", "PLTR", "PANW", "CRWD", "FTNT", "ZS", "NET", "SMCI", "ARM", "SNOW", 
+        "NVDA", "PLTR", "PANW", "CRWD", "FTNT", "ZS", "NET", "SMCI", "ARM", "SNOW",
         "MDB", "DDOG", "AI", "PATH", "NOW"
     ],
     "China & Emerging Growth": [
@@ -203,43 +191,44 @@ if 'active_ticker' not in st.session_state:
     st.session_state.active_ticker = "AAPL"
 
 # ==========================================
-# CACHING-FUNKTIONEN (INKL. WECHSELKURS)
+# CACHING & DATEN-LAYER
 # ==========================================
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_eur_exchange_rate(currency):
-    """Liefert den Umrechnungsfaktor von der Zielwährung in EUR"""
+def get_eur_exchange_rate(currency: str) -> float:
+    """Liefert den Umrechnungsfaktor von der Zielwährung in EUR."""
     if not currency or currency.upper() in ["EUR", "EUR="]:
         return 1.0
+    curr = currency.upper()
     try:
-        pair = f"{currency.upper()}EUR=X"
-        fx_ticker = yf.Ticker(pair)
-        fx_data = fx_ticker.history(period="1d")
+        # GBp (Pence) abfangen, falls britische Aktien geladen werden
+        multiplier = 0.01 if currency == "GBp" else 1.0
+        base_curr = "GBP" if currency == "GBp" else curr
+
+        fx_data = yf.Ticker(f"{base_curr}EUR=X").history(period="1d")
         if not fx_data.empty:
-            return float(fx_data['Close'].iloc[-1])
-        
-        inv_pair = f"EUR{currency.upper()}=X"
-        inv_ticker = yf.Ticker(inv_pair)
-        inv_data = inv_ticker.history(period="1d")
+            return float(fx_data['Close'].iloc[-1]) * multiplier
+
+        inv_data = yf.Ticker(f"EUR{base_curr}=X").history(period="1d")
         if not inv_data.empty:
-            return 1.0 / float(inv_data['Close'].iloc[-1])
+            return (1.0 / float(inv_data['Close'].iloc[-1])) * multiplier
     except Exception:
         pass
     return 1.0
 
 @st.cache_data(ttl=900, show_spinner=False)
-def load_stock_data(symbol):
+def load_stock_data(symbol: str):
     ticker = yf.Ticker(symbol)
-    info = ticker.info
+    info = ticker.info or {}
     df_daily = ticker.history(period="1y")
     cashflow_df = ticker.cashflow
     financials_df = ticker.financials
     balance_sheet_df = ticker.balance_sheet
-    
+
     try:
-        news_data = ticker.news
+        news_data = ticker.news or []
     except Exception:
         news_data = []
-        
+
     try:
         calendar_data = ticker.calendar
     except Exception:
@@ -249,13 +238,42 @@ def load_stock_data(symbol):
         dividends_data = ticker.dividends
     except Exception:
         dividends_data = pd.Series(dtype=float)
-        
+
     return info, df_daily, cashflow_df, financials_df, balance_sheet_df, news_data, calendar_data, dividends_data
 
-# ==========================================
-# ROBUSTE SUCHE MIT YFINANCE
-# ==========================================
-def search_ticker(query):
+@st.cache_data(ttl=600, show_spinner=False)
+def load_chart_history(symbol: str, period: str, interval: str) -> pd.DataFrame:
+    return yf.Ticker(symbol).history(period=period, interval=interval)
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_quick_quote(symbol: str) -> dict:
+    """Schnellabruf für Watchlist, Peers und Screener."""
+    try:
+        t = yf.Ticker(symbol)
+        inf = t.info or {}
+        hist = t.history(period="1y")
+        return {"symbol": symbol, "info": inf, "hist": hist, "error": None}
+    except Exception as e:
+        return {"symbol": symbol, "info": {}, "hist": pd.DataFrame(), "error": str(e)}
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_market_overview():
+    sp500 = yf.Ticker("^GSPC").history(period="1y")
+    vix = yf.Ticker("^VIX").history(period="5d")
+    dax = yf.Ticker("^GDAXI").history(period="1y")
+    sector_perf = []
+    for name, sym in SECTOR_ETFS.items():
+        try:
+            h = yf.Ticker(sym).history(period="1mo")
+            if len(h) >= 2:
+                chg = ((h['Close'].iloc[-1] - h['Close'].iloc[0]) / h['Close'].iloc[0]) * 100
+                sector_perf.append({"Sektor": name, "Performance (%)": chg})
+        except Exception:
+            continue
+    return sp500, vix, dax, sector_perf
+
+@st.cache_data(ttl=600, show_spinner=False)
+def search_ticker(query: str):
     if not query:
         return []
     try:
@@ -273,58 +291,133 @@ def search_ticker(query):
         return []
 
 # ==========================================
-# PIOTROSKI F-SCORE BERECHNUNG
+# FINANZMATHEMATIK & SCORING
 # ==========================================
-def calculate_piotroski_score(financials, balance_sheet, cashflow):
+def calculate_dcf(fcf_millions: float, net_debt_millions: float, shares_millions: float,
+                  growth_y1_5: float = 0.10, growth_y6_10: float = 0.05,
+                  wacc: float = 0.09, terminal_multiple: float = 15.0) -> float:
+    if shares_millions <= 0 or fcf_millions <= 0:
+        return 0.0
+    disc_fcf_sum = 0.0
+    p_fcf = fcf_millions
+    for y in range(1, 11):
+        r = growth_y1_5 if y <= 5 else growth_y6_10
+        p_fcf *= (1 + r)
+        disc_fcf_sum += p_fcf / ((1 + wacc) ** y)
+
+    tv = p_fcf * terminal_multiple
+    disc_tv = tv / ((1 + wacc) ** 10)
+    eq_val = (disc_fcf_sum + disc_tv) - net_debt_millions
+    return max(0.0, eq_val / shares_millions)
+
+def _get_row_val(df: pd.DataFrame, keys: list, col_idx: int = 0, default=None):
+    if df is None or df.empty:
+        return default
+    for k in keys:
+        if k in df.index and len(df.columns) > col_idx:
+            val = df.loc[k].iloc[col_idx]
+            if pd.notna(val):
+                return float(val)
+    return default
+
+def calculate_piotroski_score(financials: pd.DataFrame, balance_sheet: pd.DataFrame, cashflow: pd.DataFrame):
+    """Vollständiger 9-Punkte Piotroski F-Score."""
     score = 0
     details = []
-    try:
-        if financials.empty or balance_sheet.empty or cashflow.empty:
-            return 0, [("🟡 Info", "Unvollständige Bilanzen für F-Score")]
-            
-        net_income = financials.loc['Net Income'].iloc[0] if 'Net Income' in financials.index else 0
-        if net_income > 0:
-            score += 1
-            details.append(("🟢 F1 - Profitabilität", "Positives Nettoeinkommen"))
-        else:
-            details.append(("🔴 F1 - Profitabilität", "Negatives Nettoeinkommen"))
-            
-        ocf = cashflow.loc['Operating Cash Flow'].iloc[0] if 'Operating Cash Flow' in cashflow.index else 0
-        if ocf > 0:
-            score += 1
-            details.append(("🟢 F2 - Cashflow", "Positiver operativer Cashflow"))
-        else:
-            details.append(("🔴 F2 - Cashflow", "Negativer operativer Cashflow"))
-            
-        tot_assets = balance_sheet.loc['Total Assets'].iloc[0] if 'Total Assets' in balance_sheet.index else 1
-        tot_assets_prev = balance_sheet.loc['Total Assets'].iloc[1] if 'Total Assets' in balance_sheet.index and len(balance_sheet.columns) > 1 else tot_assets
-        roa_curr = net_income / tot_assets
-        net_inc_prev = financials.loc['Net Income'].iloc[1] if 'Net Income' in financials.index and len(financials.columns) > 1 else 0
-        roa_prev = net_inc_prev / tot_assets_prev
-        
-        if roa_curr > roa_prev:
-            score += 1
-            details.append(("🟢 F3 - ROA Dynamik", f"ROA gestiegen ({roa_curr*100:.1f}% vs {roa_prev*100:.1f}%)"))
-        else:
-            details.append(("🔴 F3 - ROA Dynamik", "ROA gesunken oder stagniert"))
-            
-        if ocf > net_income:
-            score += 1
-            details.append(("🟢 F4 - Gewinnqualität", "Operativer Cashflow ist höher als der Bilanzgewinn"))
-        else:
-            details.append(("🔴 F4 - Gewinnqualität", "Bilanzgewinn höher als tatsächlicher Cashflow"))
+    if financials is None or financials.empty or balance_sheet is None or balance_sheet.empty or cashflow is None or cashflow.empty:
+        return 0, [("🟡 Info", "Unvollständige Bilanzen für Piotroski F-Score")]
 
-        lt_debt_curr = balance_sheet.loc['Long Term Debt'].iloc[0] if 'Long Term Debt' in balance_sheet.index else 0
-        lt_debt_prev = balance_sheet.loc['Long Term Debt'].iloc[1] if 'Long Term Debt' in balance_sheet.index and len(balance_sheet.columns) > 1 else lt_debt_curr
-        if lt_debt_curr <= lt_debt_prev:
-            score += 1
-            details.append(("🟢 F5 - Verschuldung", "Langfristige Schulden gesunken oder gleich geblieben"))
-        else:
-            details.append(("🔴 F5 - Verschuldung", "Langfristige Schulden gestiegen"))
+    net_inc = _get_row_val(financials, ['Net Income'], 0, 0)
+    net_inc_prev = _get_row_val(financials, ['Net Income'], 1, 0)
+    ocf = _get_row_val(cashflow, ['Operating Cash Flow', 'Total Cash From Operating Activities'], 0, 0)
+    tot_assets = _get_row_val(balance_sheet, ['Total Assets'], 0, 0)
+    tot_assets_prev = _get_row_val(balance_sheet, ['Total Assets'], 1, 0)
 
-    except Exception:
-        return score, details
-        
+    # 1. Profitabilität: Net Income > 0
+    if net_inc > 0:
+        score += 1
+        details.append(("🟢 F1 - Nettogewinn", f"Positiv ({net_inc/1e6:,.0f} Mio.)"))
+    else:
+        details.append(("🔴 F1 - Nettogewinn", "Negativ"))
+
+    # 2. Cashflow: OCF > 0
+    if ocf > 0:
+        score += 1
+        details.append(("🟢 F2 - Operativer Cashflow", f"Positiv ({ocf/1e6:,.0f} Mio.)"))
+    else:
+        details.append(("🔴 F2 - Operativer Cashflow", "Negativ"))
+
+    # 3. ROA Dynamik
+    roa_curr = (net_inc / tot_assets) if tot_assets else 0
+    roa_prev = (net_inc_prev / tot_assets_prev) if tot_assets_prev else 0
+    if roa_curr > roa_prev:
+        score += 1
+        details.append(("🟢 F3 - ROA Dynamik", f"Gestiegen ({roa_curr*100:.1f}% vs. {roa_prev*100:.1f}%)"))
+    else:
+        details.append(("🔴 F3 - ROA Dynamik", f"Gesunken/Stagniert ({roa_curr*100:.1f}% vs. {roa_prev*100:.1f}%)"))
+
+    # 4. Gewinnqualität (Accruals)
+    if ocf > net_inc:
+        score += 1
+        details.append(("🟢 F4 - Gewinnqualität", "Operativer Cashflow > Bilanzgewinn"))
+    else:
+        details.append(("🔴 F4 - Gewinnqualität", "Bilanzgewinn > Operativer Cashflow"))
+
+    # 5. Verschuldung (Long Term Debt Ratio)
+    lt_debt = _get_row_val(balance_sheet, ['Long Term Debt'], 0, 0)
+    lt_debt_prev = _get_row_val(balance_sheet, ['Long Term Debt'], 1, 0)
+    debt_ratio_curr = (lt_debt / tot_assets) if tot_assets else 0
+    debt_ratio_prev = (lt_debt_prev / tot_assets_prev) if tot_assets_prev else 0
+    if debt_ratio_curr <= debt_ratio_prev:
+        score += 1
+        details.append(("🟢 F5 - Verschuldungsgrad", "Langfristige Schuldenquote gesunken/stabil"))
+    else:
+        details.append(("🔴 F5 - Verschuldungsgrad", "Langfristige Schuldenquote gestiegen"))
+
+    # 6. Liquidität (Current Ratio)
+    curr_assets = _get_row_val(balance_sheet, ['Current Assets', 'Total Current Assets'], 0, 0)
+    curr_liab = _get_row_val(balance_sheet, ['Current Liabilities', 'Total Current Liabilities'], 0, 0)
+    curr_assets_prev = _get_row_val(balance_sheet, ['Current Assets', 'Total Current Assets'], 1, 0)
+    curr_liab_prev = _get_row_val(balance_sheet, ['Current Liabilities', 'Total Current Liabilities'], 1, 0)
+    cr_curr = (curr_assets / curr_liab) if curr_liab else 0
+    cr_prev = (curr_assets_prev / curr_liab_prev) if curr_liab_prev else 0
+    if cr_curr > cr_prev:
+        score += 1
+        details.append(("🟢 F6 - Liquidität (Current Ratio)", f"Verbessert ({cr_curr:.2f} vs. {cr_prev:.2f})"))
+    else:
+        details.append(("🔴 F6 - Liquidität (Current Ratio)", f"Gesunken ({cr_curr:.2f} vs. {cr_prev:.2f})"))
+
+    # 7. Keine Aktienverwässerung
+    shares_curr = _get_row_val(balance_sheet, ['Ordinary Shares Number', 'Share Issued'], 0, 0)
+    shares_prev = _get_row_val(balance_sheet, ['Ordinary Shares Number', 'Share Issued'], 1, 0)
+    if shares_curr <= shares_prev or shares_prev == 0:
+        score += 1
+        details.append(("🟢 F7 - Aktienanzahl", "Keine Verwässerung (Anzahl stabil/gesunken)"))
+    else:
+        details.append(("🔴 F7 - Aktienanzahl", "Neue Aktien ausgegeben (Verwässerung)"))
+
+    # 8. Bruttomarge Dynamik
+    gp_curr = _get_row_val(financials, ['Gross Profit'], 0, 0)
+    rev_curr = _get_row_val(financials, ['Total Revenue'], 0, 0)
+    gp_prev = _get_row_val(financials, ['Gross Profit'], 1, 0)
+    rev_prev = _get_row_val(financials, ['Total Revenue'], 1, 0)
+    gm_curr = (gp_curr / rev_curr) if rev_curr else 0
+    gm_prev = (gp_prev / rev_prev) if rev_prev else 0
+    if gm_curr > gm_prev:
+        score += 1
+        details.append(("🟢 F8 - Bruttomarge", f"Gestiegen ({gm_curr*100:.1f}% vs. {gm_prev*100:.1f}%)"))
+    else:
+        details.append(("🔴 F8 - Bruttomarge", f"Gesunken ({gm_curr*100:.1f}% vs. {gm_prev*100:.1f}%)"))
+
+    # 9. Kapitalumschlag (Asset Turnover)
+    at_curr = (rev_curr / tot_assets) if tot_assets else 0
+    at_prev = (rev_prev / tot_assets_prev) if tot_assets_prev else 0
+    if at_curr > at_prev:
+        score += 1
+        details.append(("🟢 F9 - Kapitalumschlag", f"Effizienz gestiegen ({at_curr:.2f}x vs. {at_prev:.2f}x)"))
+    else:
+        details.append(("🔴 F9 - Kapitalumschlag", f"Effizienz gesunken ({at_curr:.2f}x vs. {at_prev:.2f}x)"))
+
     return score, details
 
 # ==========================================
@@ -343,26 +436,27 @@ def generate_pdf_report(symbol, company_name, current_price, fair_value, score, 
     data = [
         ["Metrik", "Wert (Original)", "Wert (EUR €)"],
         ["Aktueller Kurs", f"{current_price:.2f} {currency_symbol}", f"{current_price * eur_rate:.2f} €"],
-        ["DCF Fairer Wert", f"{fair_value:.2f} {currency_symbol}", f"{fair_value * eur_rate:.2f} €"],
+        ["DCF Fairer Wert", f"{fair_value:.2f} {currency_symbol}" if fair_value > 0 else "N/A (Neg. FCF)", f"{fair_value * eur_rate:.2f} €" if fair_value > 0 else "-"],
         ["Gesamt-Score", f"{score} / 6 Punkte", "-"],
-        ["Piotroski F-Score", f"{piotroski_score} / 5 Punkte", "-"]
+        ["Piotroski F-Score", f"{piotroski_score} / 9 Punkte", "-"]
     ]
-    
+
     t = Table(data, colWidths=[150, 150, 150])
     t.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#0E1117")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0,0), (-1,0), 8),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.grey)
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0E1117")),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
     ]))
     story.append(t)
     story.append(Spacer(1, 18))
 
     story.append(Paragraph("<b>Detail-Bewertungen:</b>", styles['Heading2']))
     for status, text in reasons:
-        story.append(Paragraph(f"• <b>{status}:</b> {text}", styles['Normal']))
+        clean_status = status.encode('ascii', 'ignore').decode('ascii').strip()
+        story.append(Paragraph(f"• <b>{clean_status}:</b> {text}", styles['Normal']))
         story.append(Spacer(1, 4))
 
     doc.build(story)
@@ -375,12 +469,12 @@ def generate_pdf_report(symbol, company_name, current_price, fair_value, score, 
 st.sidebar.markdown("## 🤑 GEILEPROFITE")
 
 main_nav = st.sidebar.radio(
-    "",
-    ["📊 Aktien-Analyse", "⭐ Watchlist", "🔍 Aktien-Screener", "🌐 Markt & Zukunft"]
+    "Navigation",
+    ["📊 Aktien-Analyse", "⭐ Watchlist", "🔍 Aktien-Screener", "🌐 Markt & Zukunft"],
+    label_visibility="collapsed"
 )
 
 st.sidebar.markdown("---")
-
 ticker_symbol = st.session_state.active_ticker
 
 if st.sidebar.button(f"➕ {ticker_symbol} speichern", use_container_width=True):
@@ -391,50 +485,45 @@ if st.sidebar.button(f"➕ {ticker_symbol} speichern", use_container_width=True)
 
 if st.session_state.watchlist:
     st.sidebar.markdown("#### ⭐ Favoriten")
-    for w_sym in st.session_state.watchlist[:5]:
-        try:
-            w_t = yf.Ticker(w_sym)
-            w_inf = w_t.info
-            
-            w_curr = w_inf.get('currency', 'USD').upper()
-            w_rate = get_eur_exchange_rate(w_curr)
-            
-            price_val = w_inf.get('currentPrice', w_inf.get('regularMarketPrice', 0))
-            prev_close = w_inf.get('previousClose', price_val)
-            
-            if price_val and prev_close:
-                change_pct = ((price_val - prev_close) / prev_close) * 100
-                price_eur = price_val * w_rate
-                icon = "🟢" if change_pct >= 0 else "🔴"
-                label_str = f"{w_sym} | {price_eur:.2f} € ({icon} {change_pct:+.1f}%)"
-            else:
-                label_str = f"{w_sym}"
-        except Exception:
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        fav_results = list(executor.map(load_quick_quote, st.session_state.watchlist[:5]))
+
+    for item in fav_results:
+        w_sym = item["symbol"]
+        w_inf = item["info"]
+        w_curr = w_inf.get('currency', 'USD')
+        w_rate = get_eur_exchange_rate(w_curr)
+        price_val = w_inf.get('currentPrice', w_inf.get('regularMarketPrice', 0))
+        prev_close = w_inf.get('previousClose', price_val)
+
+        if price_val and prev_close:
+            change_pct = ((price_val - prev_close) / prev_close) * 100
+            price_eur = price_val * w_rate
+            icon = "🟢" if change_pct >= 0 else "🔴"
+            label_str = f"{w_sym} | {price_eur:.2f} € ({icon} {change_pct:+.1f}%)"
+        else:
             label_str = f"{w_sym}"
 
         if st.sidebar.button(label_str, key=f"fav_btn_{w_sym}", use_container_width=True):
             st.session_state.active_ticker = w_sym
             st.rerun()
 
-
 # ==========================================
 # FENSTER 1: AKTIEN-ANALYSE
 # ==========================================
 if main_nav == "📊 Aktien-Analyse":
-    
     col_search1, col_search2 = st.columns([3, 1])
-    
+
     with col_search1:
         search_input = st.text_input(
-            "Suchbegriff oder Ticker-Symbol:", 
+            "Suchbegriff oder Ticker-Symbol:",
             placeholder="z. B. Apple, NVDA, SAP.DE, TSLA...",
             label_visibility="collapsed"
         )
-        
     with col_search2:
         btn_search = st.button("🔍 Suchen", use_container_width=True)
 
-    if search_input and (btn_search or search_input):
+    if search_input:
         search_results = search_ticker(search_input)
         if search_results:
             selected_option = st.selectbox(
@@ -443,11 +532,10 @@ if main_nav == "📊 Aktien-Analyse":
                 key="select_search_result"
             )
             for label, sym in search_results:
-                if label == selected_option:
-                    if st.session_state.active_ticker != sym:
-                        st.session_state.active_ticker = sym
-                        st.rerun()
-        else:
+                if label == selected_option and st.session_state.active_ticker != sym:
+                    st.session_state.active_ticker = sym
+                    st.rerun()
+        elif btn_search:
             direct_sym = search_input.strip().upper()
             if direct_sym != st.session_state.active_ticker:
                 st.session_state.active_ticker = direct_sym
@@ -460,44 +548,37 @@ if main_nav == "📊 Aktien-Analyse":
         try:
             with st.spinner(f"Lade Live-Daten für {ticker_symbol}..."):
                 info, df_daily, cashflow_df, financials_df, balance_sheet_df, news_data, calendar_data, dividends_data = load_stock_data(ticker_symbol)
-                ticker = yf.Ticker(ticker_symbol)
+
+            if not info or (not info.get('regularMarketPrice') and not info.get('currentPrice') and df_daily.empty):
+                st.error(f"Keine gültigen Marktdaten für **{ticker_symbol}** gefunden. Bitte überprüfe das Ticker-Symbol (z. B. `SAP.DE` für Xetra).")
+                st.stop()
 
             company_name = info.get('longName', ticker_symbol)
-            currency_code = info.get('currency', 'USD').upper()
+            raw_currency = info.get('currency', 'USD')
+            currency_code = raw_currency.upper()
             curr_symbol = "$" if currency_code == "USD" else ("€" if currency_code == "EUR" else currency_code)
-            
-            eur_rate = get_eur_exchange_rate(currency_code)
+            eur_rate = get_eur_exchange_rate(raw_currency)
 
             st.markdown(f"## {company_name} <span style='color:#8b949e; font-size: 20px;'>({info.get('symbol', ticker_symbol)})</span>", unsafe_allow_html=True)
-            st.caption(f"**Branche:** {info.get('industry', 'N/A')} | **Sektor:** {info.get('sector', 'N/A')} | **Währung:** {currency_code} (Wechselkurs zu EUR: {eur_rate:.4f})")
-            
-            current_price = info.get('currentPrice', info.get('regularMarketPrice', 0))
+            st.caption(f"**Branche:** {info.get('industry', 'N/A')} | **Sektor:** {info.get('sector', 'N/A')} | **Währung:** {raw_currency} (Faktor zu EUR: {eur_rate:.4f})")
+
+            current_price = info.get('currentPrice') or info.get('regularMarketPrice') or (df_daily['Close'].iloc[-1] if not df_daily.empty else 0)
             kgv = info.get('forwardPE', 'N/A')
-            marge = info.get('profitMargins', 0) * 100 if info.get('profitMargins') else 'N/A'
-            roe = info.get('returnOnEquity', 0) * 100 if info.get('returnOnEquity') else 'N/A'
+            marge = info.get('profitMargins', 0) * 100 if info.get('profitMargins') is not None else 'N/A'
             beta = info.get('beta', 'N/A')
-            
+
             has_tech_data = not df_daily.empty and len(df_daily) >= 200
-            
+
             if has_tech_data:
                 df_daily['SMA_50'] = ta.trend.sma_indicator(df_daily['Close'], window=50)
                 df_daily['SMA_200'] = ta.trend.sma_indicator(df_daily['Close'], window=200)
                 df_daily['RSI'] = ta.momentum.rsi(df_daily['Close'], window=14)
-                
-                bb = ta.volatility.BollingerBands(close=df_daily['Close'], window=20, window_dev=2)
-                df_daily['BB_high'] = bb.bollinger_hband()
-                df_daily['BB_low'] = bb.bollinger_lband()
-                
-                macd = ta.trend.MACD(close=df_daily['Close'])
-                df_daily['MACD'] = macd.macd()
-                df_daily['MACD_signal'] = macd.macd_signal()
-                df_daily['MACD_diff'] = macd.macd_diff()
-                
+
                 last_close = df_daily['Close'].iloc[-1]
                 last_sma50 = df_daily['SMA_50'].iloc[-1]
                 last_sma200 = df_daily['SMA_200'].iloc[-1]
                 last_rsi = df_daily['RSI'].iloc[-1]
-                
+
                 low_52 = df_daily['Low'].min()
                 high_52 = df_daily['High'].max()
                 entry_ideal_low = last_sma200 * 0.95 if last_sma200 > 0 else low_52
@@ -507,32 +588,20 @@ if main_nav == "📊 Aktien-Analyse":
                 last_sma50 = last_sma200 = last_rsi = low_52 = high_52 = 0
                 entry_ideal_low = entry_ideal_high = 0
 
-            # DCF Vorberechnung
-            free_cash_flow = 0
-            if not cashflow_df.empty and 'Free Cash Flow' in cashflow_df.index:
-                free_cash_flow = cashflow_df.loc['Free Cash Flow'].iloc[0] / 1e6
-            
-            shares_outstanding = info.get('sharesOutstanding', 1) / 1e6
-            total_debt = info.get('totalDebt', 0) / 1e6
-            total_cash = info.get('totalCash', 0) / 1e6
-            net_debt = total_debt - total_cash
+            # DCF Basisdaten
+            raw_fcf = _get_row_val(cashflow_df, ['Free Cash Flow'], 0, 0)
+            free_cash_flow_m = raw_fcf / 1e6 if raw_fcf else 0.0
+            shares_outstanding_m = (info.get('sharesOutstanding') or 0) / 1e6
+            total_debt_m = (info.get('totalDebt') or 0) / 1e6
+            total_cash_m = (info.get('totalCash') or 0) / 1e6
+            net_debt_m = total_debt_m - total_cash_m
 
-            fcf_curr = free_cash_flow if free_cash_flow != 0 else 1000.0
-            disc_fcf_list = []
-            p_fcf = fcf_curr
-            for y in range(1, 11):
-                r = 0.10 if y <= 5 else 0.05
-                p_fcf *= (1 + r)
-                disc_fcf_list.append(p_fcf / ((1 + 0.09) ** y))
-            
-            tv = p_fcf * 15.0
-            disc_tv = tv / ((1 + 0.09) ** 10)
-            eq_val = (sum(disc_fcf_list) + disc_tv) - net_debt
-            dcf_fair_value = eq_val / shares_outstanding if shares_outstanding > 0 else 0
-            dcf_margin = ((dcf_fair_value - current_price) / current_price) * 100 if current_price else 0
+            dcf_fair_value = calculate_dcf(free_cash_flow_m, net_debt_m, shares_outstanding_m)
+            dcf_margin = ((dcf_fair_value - current_price) / current_price) * 100 if (current_price and dcf_fair_value > 0) else 0
 
             piotroski_score, piotroski_details = calculate_piotroski_score(financials_df, balance_sheet_df, cashflow_df)
 
+            # Gesamt-Score (0-6)
             score = 0
             max_score = 6
             reasons = []
@@ -540,13 +609,13 @@ if main_nav == "📊 Aktien-Analyse":
             if has_tech_data:
                 if last_close > last_sma200:
                     score += 1
-                    reasons.append(("🟢 Positiv", "Kurs über SMA 200 (Aufwärtstrend)"))
+                    reasons.append(("🟢 Positiv", "Kurs über SMA 200 (Langfristiger Aufwärtstrend)"))
                 else:
-                    reasons.append(("🔴 Negativ", "Kurs unter SMA 200 (Abwärtstrend)"))
+                    reasons.append(("🔴 Negativ", "Kurs unter SMA 200 (Langfristiger Abwärtstrend)"))
 
                 if last_rsi < 35:
                     score += 1
-                    reasons.append(("🟢 Positiv", f"RSI bei {last_rsi:.1f} (Überverkauft - Kaufchance)"))
+                    reasons.append(("🟢 Positiv", f"RSI bei {last_rsi:.1f} (Überverkauft – potenzielle Kaufchance)"))
                 elif last_rsi > 65:
                     reasons.append(("🔴 Negativ", f"RSI bei {last_rsi:.1f} (Überkauft)"))
                 else:
@@ -557,22 +626,26 @@ if main_nav == "📊 Aktien-Analyse":
                     reasons.append(("🟢 Positiv", "Golden Cross aktiv (SMA 50 > SMA 200)"))
                 else:
                     reasons.append(("🔴 Negativ", "Death Cross aktiv (SMA 50 < SMA 200)"))
+            else:
+                reasons.append(("🟡 Hinweis", "Weniger als 200 Handelstage verfügbar (Technische Punkte entfallen)"))
 
-            forward_pe = info.get('forwardPE', None)
-            if forward_pe and forward_pe < 20:
+            forward_pe = info.get('forwardPE')
+            if forward_pe and 0 < forward_pe < 20:
                 score += 1
                 reasons.append(("🟢 Positiv", f"Moderates Forward-KGV ({forward_pe:.1f})"))
             elif forward_pe:
-                reasons.append(("🟡 Neutral/Teuer", f"Hohes Forward-KGV ({forward_pe:.1f})"))
+                reasons.append(("🟡 Neutral/Teuer", f"Erhöhtes Forward-KGV ({forward_pe:.1f})"))
+            else:
+                reasons.append(("🟡 Neutral", "Kein Forward-KGV verfügbar"))
 
-            margin_val = info.get('profitMargins', 0)
+            margin_val = info.get('profitMargins')
             if margin_val and margin_val > 0.15:
                 score += 1
                 reasons.append(("🟢 Positiv", f"Starke Nettomarge ({margin_val*100:.1f}%)"))
             else:
-                reasons.append(("🔴 Negativ", "Geringe/Negative Nettomarge (< 15%)"))
+                reasons.append(("🔴 Negativ", "Geringe oder negative Nettomarge (< 15%)"))
 
-            roe_val = info.get('returnOnEquity', 0)
+            roe_val = info.get('returnOnEquity')
             if roe_val and roe_val > 0.15:
                 score += 1
                 reasons.append(("🟢 Positiv", f"Hohe Eigenkapitalrendite ({roe_val*100:.1f}%)"))
@@ -582,7 +655,7 @@ if main_nav == "📊 Aktien-Analyse":
             # EXECUTIVE BANNER
             st.markdown("<br>", unsafe_allow_html=True)
             b_col1, b_col2, b_col3, b_col4 = st.columns(4)
-            
+
             with b_col1:
                 if score >= 5:
                     st.markdown("<div class='banner-card banner-card-success'><h4>🔥 Gesamt-Urteil</h4><h3 style='color:#10b981;'>STARKES KAUFSIGNAL</h3></div>", unsafe_allow_html=True)
@@ -592,15 +665,18 @@ if main_nav == "📊 Aktien-Analyse":
                     st.markdown("<div class='banner-card banner-card-danger'><h4>⛔ Gesamt-Urteil</h4><h3 style='color:#ef4444;'>MEIDEN / VORSICHT</h3></div>", unsafe_allow_html=True)
 
             with b_col2:
-                st.metric("Gesamt-Score", f"{score} / {max_score} Pkt.", delta=f"Piotroski: {piotroski_score}/5")
+                st.metric("Gesamt-Score", f"{score} / {max_score} Pkt.", delta=f"Piotroski: {piotroski_score}/9")
 
             with b_col3:
-                dcf_eur = dcf_fair_value * eur_rate
-                delta_str = f"{dcf_margin:+.1f}% vs. Kurs"
-                if currency_code != "EUR":
-                    st.metric("DCF Fairer Wert", f"{dcf_fair_value:.2f} {curr_symbol}", delta=f"~ {dcf_eur:.2f} € | {delta_str}")
+                if dcf_fair_value > 0:
+                    dcf_eur = dcf_fair_value * eur_rate
+                    delta_str = f"{dcf_margin:+.1f}% vs. Kurs"
+                    if currency_code != "EUR":
+                        st.metric("DCF Fairer Wert", f"{dcf_fair_value:.2f} {curr_symbol}", delta=f"~ {dcf_eur:.2f} € | {delta_str}")
+                    else:
+                        st.metric("DCF Fairer Wert", f"{dcf_fair_value:.2f} €", delta=delta_str)
                 else:
-                    st.metric("DCF Fairer Wert", f"{dcf_fair_value:.2f} €", delta=delta_str)
+                    st.metric("DCF Fairer Wert", "N/A", delta="Negativer/Fehlender FCF", delta_color="off")
 
             with b_col4:
                 pdf_bytes = generate_pdf_report(ticker_symbol, company_name, current_price, dcf_fair_value, score, piotroski_score, reasons, curr_symbol, eur_rate)
@@ -611,41 +687,39 @@ if main_nav == "📊 Aktien-Analyse":
             st.markdown("<br>", unsafe_allow_html=True)
 
             col1, col2, col3, col4 = st.columns(4)
-            
             price_eur = current_price * eur_rate
             if currency_code != "EUR":
                 col1.metric("Aktueller Kurs", f"{current_price:.2f} {curr_symbol}", delta=f"~ {price_eur:.2f} €")
             else:
                 col1.metric("Aktueller Kurs", f"{current_price:.2f} €")
-                
-            col2.metric("Forward KGV", f"{kgv:.2f}" if isinstance(kgv, (int, float)) else kgv)
-            col3.metric("Nettomarge", f"{marge:.2f}%" if isinstance(marge, (int, float)) else marge)
+
+            col2.metric("Forward KGV", f"{kgv:.2f}" if isinstance(kgv, (int, float)) else str(kgv))
+            col3.metric("Nettomarge", f"{marge:.2f}%" if isinstance(marge, (int, float)) else str(marge))
             col4.metric("Beta (S&P 500)", f"{beta:.2f}" if isinstance(beta, (int, float)) else str(beta))
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # Unter-Tabs
+            # UNTER-TABS
             tab_chart, tab_entry, tab_risk, tab_analysts, tab_dividends, tab_peers, tab_news, tab_signals, tab_dcf, tab_finances = st.tabs([
-                "📈 Chart & Indikatoren", 
+                "📈 Chart & Indikatoren",
                 "🎯 Einstiegszonen",
                 "🛡️ Positionsrechner",
                 "🎯 Analysten-Ratings",
                 "💰 Dividenden",
                 "⚔️ Peer-Group",
                 "📰 News & Termine",
-                "🚦 Lage-Analyse", 
-                "🧮 DCF-Modell", 
+                "🚦 Lage-Analyse",
+                "🧮 DCF-Modell",
                 "📑 Finanzen"
             ])
 
             with tab_chart:
                 st.subheader("Kursverlauf & Indikatoren")
-                
-                col_tf1, col_tf2 = st.columns(2)
+                col_tf1, col_tf2, col_tf3 = st.columns([1, 1, 1])
                 with col_tf1:
                     timeframe = st.selectbox(
-                        "Zeitraum:", 
-                        ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"], 
+                        "Zeitraum:",
+                        ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"],
                         index=5
                     )
                 with col_tf2:
@@ -658,45 +732,51 @@ if main_nav == "📊 Aktien-Analyse":
                     else:
                         interval_options = ["1d", "1wk", "1mo"]
                         default_idx = 0
-                        
                     interval = st.selectbox("Intervall (Auflösung):", interval_options, index=default_idx)
+                with col_tf3:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    show_bb = st.checkbox("Bollinger Bänder & SMA", value=True)
 
-                hist = ticker.history(period=timeframe, interval=interval)
-                
+                hist = load_chart_history(ticker_symbol, timeframe, interval)
+
                 if not hist.empty:
-                    show_bb = st.checkbox("Bollinger Bänder anzeigen", value=True)
-                    
-                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
-                    
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.72, 0.28])
+
                     fig.add_trace(go.Candlestick(
-                        x=hist.index, 
-                        open=hist['Open'], 
-                        high=hist['High'], 
-                        low=hist['Low'], 
-                        close=hist['Close'], 
+                        x=hist.index,
+                        open=hist['Open'],
+                        high=hist['High'],
+                        low=hist['Low'],
+                        close=hist['Close'],
                         name=f"Kurs ({curr_symbol})"
                     ), row=1, col=1)
-                    
-                    if show_bb and 'BB_high' in df_daily.columns and timeframe not in ["1d", "5d"]:
-                        fig.add_trace(go.Scatter(x=df_daily.index, y=df_daily['BB_high'], line=dict(color='rgba(255, 255, 255, 0.3)'), name="BB Oben"), row=1, col=1)
-                        fig.add_trace(go.Scatter(x=df_daily.index, y=df_daily['BB_low'], line=dict(color='rgba(255, 255, 255, 0.3)'), fill='tonexty', fillcolor='rgba(255, 255, 255, 0.05)', name="BB Unten"), row=1, col=1)
 
-                    if 'MACD' in df_daily.columns and timeframe not in ["1d", "5d"]:
-                        fig.add_trace(go.Scatter(x=df_daily.index, y=df_daily['MACD'], line=dict(color='#58a6ff'), name="MACD"), row=2, col=1)
-                        fig.add_trace(go.Scatter(x=df_daily.index, y=df_daily['MACD_signal'], line=dict(color='#f59e0b'), name="Signal"), row=2, col=1)
-                        colors_macd = ['#10b981' if val >= 0 else '#ef4444' for val in df_daily['MACD_diff']]
-                        fig.add_trace(go.Bar(x=df_daily.index, y=df_daily['MACD_diff'], marker_color=colors_macd, name="Hist"), row=2, col=1)
+                    if show_bb and len(hist) >= 20:
+                        bb = ta.volatility.BollingerBands(close=hist['Close'], window=20, window_dev=2)
+                        fig.add_trace(go.Scatter(x=hist.index, y=bb.bollinger_hband(), line=dict(color='rgba(255, 255, 255, 0.3)', width=1), name="BB Oben"), row=1, col=1)
+                        fig.add_trace(go.Scatter(x=hist.index, y=bb.bollinger_lband(), line=dict(color='rgba(255, 255, 255, 0.3)', width=1), fill='tonexty', fillcolor='rgba(255, 255, 255, 0.05)', name="BB Unten"), row=1, col=1)
+                        if len(hist) >= 50:
+                            fig.add_trace(go.Scatter(x=hist.index, y=ta.trend.sma_indicator(hist['Close'], 50), line=dict(color='#58a6ff', width=1.2), name="SMA 50"), row=1, col=1)
+
+                    if len(hist) >= 26:
+                        macd = ta.trend.MACD(close=hist['Close'])
+                        macd_diff = macd.macd_diff()
+                        fig.add_trace(go.Scatter(x=hist.index, y=macd.macd(), line=dict(color='#58a6ff', width=1.2), name="MACD"), row=2, col=1)
+                        fig.add_trace(go.Scatter(x=hist.index, y=macd.macd_signal(), line=dict(color='#f59e0b', width=1.2), name="Signal"), row=2, col=1)
+                        colors_macd = ['#10b981' if val >= 0 else '#ef4444' for val in macd_diff.fillna(0)]
+                        fig.add_trace(go.Bar(x=hist.index, y=macd_diff, marker_color=colors_macd, name="Hist"), row=2, col=1)
 
                     fig.update_layout(
-                        xaxis_rangeslider_visible=False, 
-                        template="plotly_dark", 
-                        height=600, 
-                        paper_bgcolor='rgba(0,0,0,0)', 
-                        plot_bgcolor='rgba(0,0,0,0)'
+                        xaxis_rangeslider_visible=False,
+                        template="plotly_dark",
+                        height=600,
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        margin=dict(l=10, r=10, t=20, b=10)
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.warning("Keine Intraday-Daten für dieses Intervall verfügbar.")
+                    st.warning("Keine Daten für dieses Zeitraum-/Intervall-Paar verfügbar.")
 
             with tab_entry:
                 if has_tech_data:
@@ -713,25 +793,28 @@ if main_nav == "📊 Aktien-Analyse":
                         fig_entry.add_hrect(y0=entry_ideal_low, y1=entry_ideal_high, fillcolor="green", opacity=0.15, line_width=0)
                         fig_entry.update_layout(template="plotly_dark", height=350, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                         st.plotly_chart(fig_entry, use_container_width=True)
+                else:
+                    st.info("Für Einstiegszonen werden mindestens 200 Handelstage benötigt.")
 
             with tab_risk:
                 st.subheader("🛡️ Risk & Positionsgrößen-Rechner")
                 p_col1, p_col2 = st.columns([1, 1])
                 with p_col1:
-                    account_size_eur = st.number_input("Gesamtes Depotkapital (€):", value=10000.0, step=1000.0)
+                    account_size_eur = st.number_input("Gesamtes Depotkapital (€):", value=10000.0, step=1000.0, min_value=100.0)
                     risk_pct = st.slider("Maximales Risiko pro Trade (%):", 0.5, 5.0, 1.0, 0.5) / 100
-                    stop_loss_curr = st.number_input(f"Geplanter Stop-Loss Preis ({curr_symbol}):", value=float(current_price * 0.95), step=1.0)
-                
+                    default_sl = max(0.01, float(current_price * 0.95))
+                    stop_loss_curr = st.number_input(f"Geplanter Stop-Loss Preis ({curr_symbol}):", value=default_sl, step=1.0, min_value=0.01)
+
                 risk_amount_eur = account_size_eur * risk_pct
                 risk_per_share_curr = current_price - stop_loss_curr
                 risk_per_share_eur = risk_per_share_curr * eur_rate
-                
+
                 with p_col2:
                     if risk_per_share_curr > 0:
                         position_shares = int(risk_amount_eur / risk_per_share_eur)
                         position_value_curr = position_shares * current_price
                         position_value_eur = position_value_curr * eur_rate
-                        
+
                         st.success(f"**Empfohlene Kaufmenge:** {position_shares} Aktien")
                         st.metric("Positionsvolumen", f"{position_value_eur:,.2f} €", delta=f"{position_value_curr:,.2f} {curr_symbol}")
                         st.metric("Maximaler Verlust bei Stop-Loss", f"{risk_amount_eur:,.2f} €")
@@ -739,38 +822,35 @@ if main_nav == "📊 Aktien-Analyse":
                         st.error("Der Stop-Loss muss unter dem aktuellen Kurs liegen!")
 
             with tab_analysts:
-                t_low = info.get('targetLowPrice', 'N/A')
-                t_mean = info.get('targetMeanPrice', 'N/A')
-                t_high = info.get('targetHighPrice', 'N/A')
-                rec = info.get('recommendationKey', 'N/A').upper()
-                a_col1, a_col2, a_col3, a_col4 = st.columns(4)
-                a_col1.metric("Konsens", rec)
-                a_col2.metric("Ziel Tief", f"{t_low:.2f} {curr_symbol}" if isinstance(t_low, (int, float)) else str(t_low), delta=f"~ {t_low*eur_rate:.2f} €" if isinstance(t_low, (int, float)) else None)
-                a_col3.metric("Ziel Schnitt", f"{t_mean:.2f} {curr_symbol}" if isinstance(t_mean, (int, float)) else str(t_mean), delta=f"~ {t_mean*eur_rate:.2f} €" if isinstance(t_mean, (int, float)) else None)
-                a_col4.metric("Ziel Hoch", f"{t_high:.2f} {curr_symbol}" if isinstance(t_high, (int, float)) else str(t_high), delta=f"~ {t_high*eur_rate:.2f} €" if isinstance(t_high, (int, float)) else None)
+                t_low = info.get('targetLowPrice')
+                t_mean = info.get('targetMeanPrice')
+                t_high = info.get('targetHighPrice')
+                rec = (info.get('recommendationKey') or 'N/A').upper()
+                num_analysts = info.get('numberOfAnalystOpinions', 'N/A')
 
-            # ==========================================
-            # KORRIGIERTER TAB: DIVIDENDEN
-            # ==========================================
+                a_col1, a_col2, a_col3, a_col4 = st.columns(4)
+                a_col1.metric("Konsens", rec, delta=f"{num_analysts} Analysten" if num_analysts != 'N/A' else None)
+                a_col2.metric("Ziel Tief", f"{t_low:.2f} {curr_symbol}" if isinstance(t_low, (int, float)) else "N/A", delta=f"~ {t_low*eur_rate:.2f} €" if isinstance(t_low, (int, float)) else None)
+                a_col3.metric("Ziel Schnitt", f"{t_mean:.2f} {curr_symbol}" if isinstance(t_mean, (int, float)) else "N/A", delta=f"~ {t_mean*eur_rate:.2f} €" if isinstance(t_mean, (int, float)) else None)
+                a_col4.metric("Ziel Hoch", f"{t_high:.2f} {curr_symbol}" if isinstance(t_high, (int, float)) else "N/A", delta=f"~ {t_high*eur_rate:.2f} €" if isinstance(t_high, (int, float)) else None)
+
             with tab_dividends:
                 st.subheader("💰 Dividenden-Analyse")
-                div_yield = (info.get('dividendYield', 0) or 0) * 100
-                div_rate = info.get('dividendRate', 0) or 0
-                payout_ratio = (info.get('payoutRatio', 0) or 0) * 100
-                
+                div_yield = (info.get('dividendYield') or 0) * 100
+                div_rate = info.get('dividendRate') or 0
+                payout_ratio = (info.get('payoutRatio') or 0) * 100
+
                 div_col1, div_col2, div_col3, div_col4 = st.columns(4)
-                
                 div_col1.metric("Dividendenrendite", f"{div_yield:.2f}%")
-                
+
                 div_rate_eur = div_rate * eur_rate
                 if currency_code != "EUR":
                     div_col2.metric("Dividende / Aktie p.a.", f"{div_rate:.2f} {curr_symbol}", delta=f"~ {div_rate_eur:.2f} €")
                 else:
                     div_col2.metric("Dividende / Aktie p.a.", f"{div_rate:.2f} €")
-                    
+
                 div_col3.metric("Ausschüttungsquote", f"{payout_ratio:.2f}%")
-                
-                # Beispielrechnung basierend auf 1.000 € oder Positionsgröße
+
                 sample_shares = 100
                 est_payout_eur = sample_shares * div_rate_eur
                 div_col4.metric(f"Ertrag bei {sample_shares} Stk.", f"{est_payout_eur:.2f} € / Jahr")
@@ -779,18 +859,18 @@ if main_nav == "📊 Aktien-Analyse":
                     st.markdown("#### 📜 Historische Dividendenzahlungen (pro Aktie)")
                     div_df = dividends_data.tail(20).to_frame(name="Ausschüttung")
                     div_df['Ausschüttung (EUR)'] = div_df['Ausschüttung'] * eur_rate
-                    
+
                     fig_div = go.Figure()
                     fig_div.add_trace(go.Bar(
-                        x=div_df.index, 
-                        y=div_df['Ausschüttung (EUR)'], 
+                        x=div_df.index,
+                        y=div_df['Ausschüttung (EUR)'],
                         name="Dividende (€)",
                         marker_color="#2ea043"
                     ))
                     fig_div.update_layout(
-                        template="plotly_dark", 
-                        height=350, 
-                        paper_bgcolor='rgba(0,0,0,0)', 
+                        template="plotly_dark",
+                        height=350,
+                        paper_bgcolor='rgba(0,0,0,0)',
                         plot_bgcolor='rgba(0,0,0,0)',
                         yaxis_title="Betrag in €"
                     )
@@ -799,80 +879,107 @@ if main_nav == "📊 Aktien-Analyse":
                     st.info("Dieses Unternehmen schüttet aktuell keine Dividende aus.")
 
             with tab_peers:
-                peer_input = st.text_input("Peers eingeben:", value=f"{ticker_symbol}, MSFT, GOOGL, NVDA")
-                peer_list = [p.strip().upper() for p in peer_input.split(",") if p.strip()]
+                peer_input = st.text_input("Peers eingeben (kommagetrennt):", value=f"{ticker_symbol}, MSFT, GOOGL, NVDA")
+                peer_list = list(dict.fromkeys([p.strip().upper() for p in peer_input.split(",") if p.strip()]))
                 if st.button("Peers vergleichen", use_container_width=True):
-                    peer_data = []
-                    for p_sym in peer_list:
-                        try:
-                            p_inf = yf.Ticker(p_sym).info
-                            p_curr = p_inf.get('currency', 'USD').upper()
-                            p_rate = get_eur_exchange_rate(p_curr)
-                            p_price = p_inf.get('currentPrice', p_inf.get('regularMarketPrice', 0))
-                            peer_data.append({
-                                "Symbol": p_sym,
-                                "Kurs (Original)": f"{p_price:.2f} {p_curr}",
-                                "Kurs (EUR €)": f"{p_price * p_rate:.2f} €",
-                                "KGV (Fwd)": round(p_inf.get('forwardPE', 0), 2) if p_inf.get('forwardPE') else "N/A",
-                                "Nettomarge": f"{(p_inf.get('profitMargins', 0) or 0)*100:.1f}%",
-                                "ROE": f"{(p_inf.get('returnOnEquity', 0) or 0)*100:.1f}%"
-                            })
-                        except Exception: continue
-                    st.dataframe(pd.DataFrame(peer_data), use_container_width=True)
+                    with st.spinner("Lade Peer-Daten..."):
+                        with ThreadPoolExecutor(max_workers=6) as executor:
+                            peer_raw = list(executor.map(load_quick_quote, peer_list))
 
-            # ==========================================
-            # KORRIGIERTER TAB: NEWS & TERMINE
-            # ==========================================
+                    peer_data = []
+                    for item in peer_raw:
+                        p_sym = item["symbol"]
+                        p_inf = item["info"]
+                        if not p_inf:
+                            continue
+                        p_curr = p_inf.get('currency', 'USD')
+                        p_rate = get_eur_exchange_rate(p_curr)
+                        p_price = p_inf.get('currentPrice') or p_inf.get('regularMarketPrice') or 0
+                        peer_data.append({
+                            "Symbol": p_sym,
+                            "Name": p_inf.get('shortName', p_sym),
+                            "Kurs (Original)": f"{p_price:.2f} {p_curr}",
+                            "Kurs (EUR €)": f"{p_price * p_rate:.2f} €",
+                            "KGV (Fwd)": round(p_inf.get('forwardPE', 0), 2) if p_inf.get('forwardPE') else "N/A",
+                            "Nettomarge": f"{(p_inf.get('profitMargins') or 0)*100:.1f}%",
+                            "ROE": f"{(p_inf.get('returnOnEquity') or 0)*100:.1f}%"
+                        })
+                    st.dataframe(pd.DataFrame(peer_data), use_container_width=True, hide_index=True)
+
             with tab_news:
                 st.subheader("📅 Anstehende Termine & Quartalszahlen (Earnings)")
-                
-                # Prüfe auf Termindaten
                 if calendar_data is not None and not (isinstance(calendar_data, pd.DataFrame) and calendar_data.empty):
                     try:
                         cal_dict = calendar_data if isinstance(calendar_data, dict) else calendar_data.to_dict()
-                        
                         e_date = cal_dict.get('Earnings Date', ['N/A'])[0] if isinstance(cal_dict.get('Earnings Date'), list) else cal_dict.get('Earnings Date', 'N/A')
                         eps_avg = cal_dict.get('Earnings Average', 'N/A')
                         rev_avg = cal_dict.get('Revenue Average', 'N/A')
-                        
+
                         col_cal1, col_cal2, col_cal3 = st.columns(3)
                         col_cal1.metric("Nächstes Earnings Date", str(e_date))
                         col_cal2.metric("Erwarteter EPS (Schnitt)", str(eps_avg))
-                        
                         if isinstance(rev_avg, (int, float)):
                             col_cal3.metric("Erwarteter Umsatz", f"{rev_avg / 1e9:.2f} B {curr_symbol}")
                         else:
                             col_cal3.metric("Erwarteter Umsatz", str(rev_avg))
-                            
-                    except Exception as e:
+                    except Exception:
                         st.info("Keine detaillierten Termindaten über API abrufbar.")
                 else:
-                    st.info("Aktuell stehen keine bevorstehenden Termine oder Veröffentlichungstermine fest.")
+                    st.info("Aktuell stehen keine bevorstehenden Termine fest.")
 
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.subheader("📰 Aktuelle Unternehmens-News")
-                
                 if news_data:
                     for item in news_data[:5]:
-                        c = item.get('content', {})
-                        st.markdown(f"**[{c.get('title', 'Titel')}]({c.get('canonicalUrl', {}).get('url', '#')})**")
-                        st.caption(f"Quelle: {c.get('provider', {}).get('displayName', 'N/A')}")
+                        c = item.get('content', item)
+                        title = c.get('title', 'Titel')
+                        url = c.get('canonicalUrl', {}).get('url', c.get('link', '#'))
+                        provider = c.get('provider', {}).get('displayName', c.get('publisher', 'N/A'))
+                        st.markdown(f"**[{title}]({url})**")
+                        st.caption(f"Quelle: {provider}")
                         st.markdown("---")
                 else:
                     st.info("Keine aktuellen Nachrichten verfügbar.")
 
             with tab_signals:
-                st.write(f"**Score:** {score} / {max_score}")
-                for status, text in reasons: st.write(f"- **{status}:** {text}")
+                sig_col1, sig_col2 = st.columns(2)
+                with sig_col1:
+                    st.subheader(f"🚦 Basis-Check ({score} / {max_score})")
+                    for status, text in reasons:
+                        st.write(f"- **{status}:** {text}")
+                with sig_col2:
+                    st.subheader(f"🏛️ Piotroski F-Score ({piotroski_score} / 9)")
+                    for status, text in piotroski_details:
+                        st.write(f"- **{status}:** {text}")
 
             with tab_dcf:
-                st.write(f"**Berechneter DCF Wert:** {dcf_fair_value:.2f} {curr_symbol} (~ {dcf_fair_value * eur_rate:.2f} €)")
+                st.subheader("🧮 Interaktives DCF-Bewertungsmodell")
+                if free_cash_flow_m <= 0:
+                    st.warning("Das Unternehmen weist aktuell einen negativen oder fehlenden Free Cash Flow auf. Eine DCF-Bewertung auf FCF-Basis ist daher nicht sinnvoll.")
+                else:
+                    dcf_c1, dcf_c2 = st.columns([1, 1])
+                    with dcf_c1:
+                        g_1_5 = st.slider("FCF-Wachstum Jahre 1–5 (% p.a.):", -5.0, 30.0, 10.0, 0.5) / 100
+                        g_6_10 = st.slider("FCF-Wachstum Jahre 6–10 (% p.a.):", 0.0, 15.0, 5.0, 0.5) / 100
+                        wacc_in = st.slider("Diskontierungssatz / WACC (%):", 5.0, 15.0, 9.0, 0.5) / 100
+                        term_mult = st.slider("Terminal FCF-Multiple (Jahr 10):", 8.0, 25.0, 15.0, 1.0)
+
+                    sim_fair_val = calculate_dcf(free_cash_flow_m, net_debt_m, shares_outstanding_m, g_1_5, g_6_10, wacc_in, term_mult)
+                    sim_margin = ((sim_fair_val - current_price) / current_price) * 100 if current_price else 0
+
+                    with dcf_c2:
+                        st.metric("Simulierter Fairer Wert", f"{sim_fair_val:.2f} {curr_symbol}", delta=f"{sim_margin:+.1f}% vs. Aktueller Kurs")
+                        st.metric("Simulierter Wert (EUR)", f"{sim_fair_val * eur_rate:.2f} €")
+                        st.caption(f"Basisdaten: Free Cash Flow = {free_cash_flow_m:,.1f} Mio. {curr_symbol} | Nettoverschuldung = {net_debt_m:,.1f} Mio. {curr_symbol}")
 
             with tab_finances:
                 t1, t2, t3 = st.tabs(["GuV", "Bilanz", "Cashflow"])
-                with t1: st.dataframe(financials_df, use_container_width=True)
-                with t2: st.dataframe(balance_sheet_df, use_container_width=True)
-                with t3: st.dataframe(cashflow_df, use_container_width=True)
+                with t1:
+                    st.dataframe(financials_df, use_container_width=True)
+                with t2:
+                    st.dataframe(balance_sheet_df, use_container_width=True)
+                with t3:
+                    st.dataframe(cashflow_df, use_container_width=True)
 
         except Exception as e:
             st.error(f"Fehler beim Laden von {ticker_symbol}: {e}")
@@ -885,52 +992,47 @@ elif main_nav == "⭐ Watchlist":
     st.caption("Verwalte deine favorisierten Aktien mit Live-Kursen in Euro und Tagesveränderungen.")
 
     if st.session_state.watchlist:
-        wl_data = []
-        for w_sym in st.session_state.watchlist:
-            try:
-                w_t = yf.Ticker(w_sym)
-                w_inf = w_t.info
-                
-                w_curr = w_inf.get('currency', 'USD').upper()
-                w_rate = get_eur_exchange_rate(w_curr)
-                
-                price_val = w_inf.get('currentPrice', w_inf.get('regularMarketPrice', 0))
-                prev_close = w_inf.get('previousClose', price_val)
-                
-                if price_val and prev_close:
-                    change_abs = price_val - prev_close
-                    change_pct = (change_abs / prev_close) * 100
-                    
-                    price_eur = price_val * w_rate
-                    change_abs_eur = change_abs * w_rate
-                    
-                    icon = "🟢" if change_pct >= 0 else "🔴"
-                    change_str_orig = f"{icon} {change_abs:+.2f} {w_curr} ({change_pct:+.2f}%)"
-                    change_str_eur = f"{icon} {change_abs_eur:+.2f} € ({change_pct:+.2f}%)"
-                else:
-                    price_eur = 0
-                    change_str_orig = "N/A"
-                    change_str_eur = "N/A"
+        with st.spinner("Aktualisiere Watchlist..."):
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                wl_raw = list(executor.map(load_quick_quote, st.session_state.watchlist))
 
-                wl_data.append({
-                    "Symbol": w_sym,
-                    "Name": w_inf.get('shortName', w_sym),
-                    "Kurs (EUR €)": f"{price_eur:.2f} €" if price_eur else "N/A",
-                    "Tagesveränderung (€)": change_str_eur,
-                    "Kurs (Original)": f"{price_val:.2f} {w_curr}" if price_val else "N/A",
-                    "Tagesveränderung (Original)": change_str_orig,
-                    "Forward KGV": round(w_inf.get('forwardPE', 0), 2) if w_inf.get('forwardPE') else "N/A",
-                    "Branche": w_inf.get('industry', 'N/A')
-                })
-            except Exception:
-                wl_data.append({
-                    "Symbol": w_sym, "Name": w_sym, "Kurs (EUR €)": "N/A", 
-                    "Tagesveränderung (€)": "N/A", "Kurs (Original)": "N/A", 
-                    "Tagesveränderung (Original)": "N/A", "Forward KGV": "N/A", "Branche": "N/A"
-                })
-        
-        st.dataframe(pd.DataFrame(wl_data), use_container_width=True)
-        
+        wl_data = []
+        for item in wl_raw:
+            w_sym = item["symbol"]
+            w_inf = item["info"]
+            w_curr = w_inf.get('currency', 'USD')
+            w_rate = get_eur_exchange_rate(w_curr)
+
+            price_val = w_inf.get('currentPrice') or w_inf.get('regularMarketPrice') or 0
+            prev_close = w_inf.get('previousClose') or price_val
+
+            if price_val and prev_close:
+                change_abs = price_val - prev_close
+                change_pct = (change_abs / prev_close) * 100
+                price_eur = price_val * w_rate
+                change_abs_eur = change_abs * w_rate
+
+                icon = "🟢" if change_pct >= 0 else "🔴"
+                change_str_orig = f"{icon} {change_abs:+.2f} {w_curr} ({change_pct:+.2f}%)"
+                change_str_eur = f"{icon} {change_abs_eur:+.2f} € ({change_pct:+.2f}%)"
+            else:
+                price_eur = 0
+                change_str_orig = "N/A"
+                change_str_eur = "N/A"
+
+            wl_data.append({
+                "Symbol": w_sym,
+                "Name": w_inf.get('shortName', w_sym),
+                "Kurs (EUR €)": f"{price_eur:.2f} €" if price_eur else "N/A",
+                "Tagesveränderung (€)": change_str_eur,
+                "Kurs (Original)": f"{price_val:.2f} {w_curr}" if price_val else "N/A",
+                "Tagesveränderung (Original)": change_str_orig,
+                "Forward KGV": round(w_inf.get('forwardPE', 0), 2) if w_inf.get('forwardPE') else "N/A",
+                "Branche": w_inf.get('industry', 'N/A')
+            })
+
+        st.dataframe(pd.DataFrame(wl_data), use_container_width=True, hide_index=True)
+
         col_wl1, col_wl2 = st.columns([1, 1])
         with col_wl1:
             remove_sym = st.selectbox("Aktie aus Watchlist entfernen:", st.session_state.watchlist)
@@ -939,6 +1041,7 @@ elif main_nav == "⭐ Watchlist":
                 st.rerun()
 
         with col_wl2:
+            st.markdown("<br>", unsafe_allow_html=True)
             wl_df = pd.DataFrame({"Symbol": st.session_state.watchlist})
             csv_data = wl_df.to_csv(index=False).encode('utf-8')
             st.download_button("💾 Watchlist als CSV Exportieren", data=csv_data, file_name="watchlist.csv", mime="text/csv", use_container_width=True)
@@ -956,7 +1059,7 @@ elif main_nav == "🔍 Aktien-Screener":
     with col_sel1:
         selected_preset = st.selectbox("Aktien-Gruppe:", list(SCREENER_LISTS.keys()))
         custom_symbols_input = st.text_area("Oder Symbole eingeben:", value=", ".join(SCREENER_LISTS[selected_preset]))
-        
+
         signal_filter = st.multiselect(
             "Tages-Einstiegssignale filtern (optional):",
             ["🔥 Volumen-Ausbruch (> 1.5x Ø Vol)", "📈 20-Tage-Hoch Durchbruch", "📉 RSI Überverkauft (< 35)", "🎯 Nahe 200-SMA Support"],
@@ -968,91 +1071,88 @@ elif main_nav == "🔍 Aktien-Screener":
         max_pe = st.number_input("Maximales Forward KGV:", value=40.0, step=5.0)
 
     if st.button("🚀 Screening starten", use_container_width=True):
-        symbols_to_scan = [s.strip().upper() for s in custom_symbols_input.split(",") if s.strip()]
+        symbols_to_scan = list(dict.fromkeys([s.strip().upper() for s in custom_symbols_input.split(",") if s.strip()]))
         results = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
 
-        for idx, sym in enumerate(symbols_to_scan):
-            status_text.text(f"Analysiere {sym} ({idx+1}/{len(symbols_to_scan)})...")
-            progress_bar.progress((idx + 1) / len(symbols_to_scan))
-            time.sleep(0.4)
+        with st.spinner(f"Scanne {len(symbols_to_scan)} Aktien parallel..."):
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                scanned_items = list(executor.map(load_quick_quote, symbols_to_scan))
 
-            try:
-                t = yf.Ticker(sym)
-                inf = t.info
-                df_h = t.history(period="1y")
+        for item in scanned_items:
+            sym = item["symbol"]
+            inf = item["info"]
+            df_h = item["hist"]
 
-                if df_h.empty or len(df_h) < 50: 
-                    continue
-
-                f_pe = inf.get('forwardPE', 999)
-                margin = (inf.get('profitMargins', 0) or 0) * 100
-                roe_sc = (inf.get('returnOnEquity', 0) or 0) * 100
-                price = inf.get('currentPrice', inf.get('regularMarketPrice', df_h['Close'].iloc[-1]))
-                s_curr = inf.get('currency', 'USD').upper()
-                s_rate = get_eur_exchange_rate(s_curr)
-
-                df_h['SMA_50'] = ta.trend.sma_indicator(df_h['Close'], window=50)
-                df_h['SMA_200'] = ta.trend.sma_indicator(df_h['Close'], window=200) if len(df_h) >= 200 else df_h['SMA_50']
-                df_h['RSI'] = ta.momentum.rsi(df_h['Close'], window=14)
-                df_h['Vol_SMA20'] = df_h['Volume'].rolling(20).mean()
-
-                last_c = df_h['Close'].iloc[-1]
-                last_s200 = df_h['SMA_200'].iloc[-1]
-                last_r = df_h['RSI'].iloc[-1] if not pd.isna(df_h['RSI'].iloc[-1]) else 50
-                last_vol = df_h['Volume'].iloc[-1]
-                avg_vol = df_h['Vol_SMA20'].iloc[-1]
-                high_20d = df_h['High'].iloc[-21:-1].max() if len(df_h) > 21 else df_h['High'].max()
-
-                c_score = 0
-                if last_c > last_s200: c_score += 1
-                if last_r < 35: c_score += 1
-                if f_pe < 25: c_score += 1
-                if margin > 12: c_score += 1
-                if roe_sc > 12: c_score += 1
-
-                today_signals = []
-                if avg_vol > 0 and (last_vol / avg_vol) >= 1.5:
-                    today_signals.append("🔥 Vol-Spike")
-                if last_c >= high_20d:
-                    today_signals.append("📈 20D-Breakout")
-                if last_r <= 35:
-                    today_signals.append("📉 RSI Oversold")
-                if last_s200 > 0 and abs(last_c - last_s200) / last_s200 <= 0.02:
-                    today_signals.append("🎯 200-SMA Test")
-
-                match_signal_filter = True
-                if "🔥 Volumen-Ausbruch (> 1.5x Ø Vol)" in signal_filter and "🔥 Vol-Spike" not in today_signals:
-                    match_signal_filter = False
-                if "📈 20-Tage-Hoch Durchbruch" in signal_filter and "📈 20D-Breakout" not in today_signals:
-                    match_signal_filter = False
-                if "📉 RSI Überverkauft (< 35)" in signal_filter and "📉 RSI Oversold" not in today_signals:
-                    match_signal_filter = False
-                if "🎯 Nahe 200-SMA Support" in signal_filter and "🎯 200-SMA Test" not in today_signals:
-                    match_signal_filter = False
-
-                if c_score >= min_score and f_pe <= max_pe and match_signal_filter:
-                    results.append({
-                        "Symbol": sym,
-                        "Name": inf.get('shortName', sym),
-                        "Tages-Signal": ", ".join(today_signals) if today_signals else "➖ Konsolidierung",
-                        "Score": f"{c_score} / 5",
-                        "Kurs (Original)": f"{price:.2f} {s_curr}" if price else "N/A",
-                        "Kurs (EUR €)": f"{price * s_rate:.2f} €" if price else "N/A",
-                        "Volumen vs Ø": f"{(last_vol / avg_vol):.1f}x" if avg_vol > 0 else "N/A",
-                        "Forward KGV": round(f_pe, 2) if f_pe != 999 else "N/A",
-                        "RSI (14)": round(last_r, 1)
-                    })
-            except Exception: 
+            if df_h.empty or len(df_h) < 50:
                 continue
 
-        status_text.empty()
-        progress_bar.empty()
+            f_pe = inf.get('forwardPE') or 999
+            margin = (inf.get('profitMargins') or 0) * 100
+            roe_sc = (inf.get('returnOnEquity') or 0) * 100
+            price = inf.get('currentPrice') or inf.get('regularMarketPrice') or df_h['Close'].iloc[-1]
+            s_curr = inf.get('currency', 'USD')
+            s_rate = get_eur_exchange_rate(s_curr)
+
+            sma_50 = ta.trend.sma_indicator(df_h['Close'], window=50)
+            sma_200 = ta.trend.sma_indicator(df_h['Close'], window=200) if len(df_h) >= 200 else sma_50
+            rsi_s = ta.momentum.rsi(df_h['Close'], window=14)
+            vol_sma20 = df_h['Volume'].rolling(20).mean()
+
+            last_c = df_h['Close'].iloc[-1]
+            last_s200 = sma_200.iloc[-1]
+            last_r = rsi_s.iloc[-1] if pd.notna(rsi_s.iloc[-1]) else 50
+            last_vol = df_h['Volume'].iloc[-1]
+            avg_vol = vol_sma20.iloc[-1]
+            high_20d = df_h['High'].iloc[-21:-1].max() if len(df_h) > 21 else df_h['High'].max()
+
+            c_score = 0
+            if last_c > last_s200:
+                c_score += 1
+            if last_r < 35:
+                c_score += 1
+            if 0 < f_pe < 25:
+                c_score += 1
+            if margin > 12:
+                c_score += 1
+            if roe_sc > 12:
+                c_score += 1
+
+            today_signals = []
+            if avg_vol > 0 and (last_vol / avg_vol) >= 1.5:
+                today_signals.append("🔥 Vol-Spike")
+            if last_c >= high_20d:
+                today_signals.append("📈 20D-Breakout")
+            if last_r <= 35:
+                today_signals.append("📉 RSI Oversold")
+            if last_s200 > 0 and abs(last_c - last_s200) / last_s200 <= 0.02:
+                today_signals.append("🎯 200-SMA Test")
+
+            match_signal_filter = True
+            if "🔥 Volumen-Ausbruch (> 1.5x Ø Vol)" in signal_filter and "🔥 Vol-Spike" not in today_signals:
+                match_signal_filter = False
+            if "📈 20-Tage-Hoch Durchbruch" in signal_filter and "📈 20D-Breakout" not in today_signals:
+                match_signal_filter = False
+            if "📉 RSI Überverkauft (< 35)" in signal_filter and "📉 RSI Oversold" not in today_signals:
+                match_signal_filter = False
+            if "🎯 Nahe 200-SMA Support" in signal_filter and "🎯 200-SMA Test" not in today_signals:
+                match_signal_filter = False
+
+            if c_score >= min_score and f_pe <= max_pe and match_signal_filter:
+                results.append({
+                    "Symbol": sym,
+                    "Name": inf.get('shortName', sym),
+                    "Tages-Signal": ", ".join(today_signals) if today_signals else "➖ Konsolidierung",
+                    "Score": f"{c_score} / 5",
+                    "Kurs (Original)": f"{price:.2f} {s_curr}" if price else "N/A",
+                    "Kurs (EUR €)": f"{price * s_rate:.2f} €" if price else "N/A",
+                    "Volumen vs Ø": f"{(last_vol / avg_vol):.1f}x" if avg_vol > 0 else "N/A",
+                    "Forward KGV": round(f_pe, 2) if f_pe != 999 else "N/A",
+                    "RSI (14)": round(last_r, 1)
+                })
 
         if results:
             st.success(f"Gefunden: {len(results)} Aktien entsprechen deinen Kriterien!")
-            st.dataframe(pd.DataFrame(results), use_container_width=True)
+            st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
         else:
             st.warning("Keine Treffer mit diesen Kriterien gefunden.")
 
@@ -1065,9 +1165,7 @@ elif main_nav == "🌐 Markt & Zukunft":
 
     with st.spinner("Lade globale Marktdaten..."):
         try:
-            sp500 = yf.Ticker("^GSPC").history(period="1y")
-            vix = yf.Ticker("^VIX").history(period="1d")
-            dax = yf.Ticker("^GDAXI").history(period="1y")
+            sp500, vix, dax, sector_data = load_market_overview()
 
             last_sp500 = sp500['Close'].iloc[-1]
             sp500_sma200 = ta.trend.sma_indicator(sp500['Close'], window=200).iloc[-1]
@@ -1093,7 +1191,7 @@ elif main_nav == "🌐 Markt & Zukunft":
                 fg_status = "🔥 Extreme Gier (Extreme Greed)"
 
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            
+
             with col_m1:
                 st.metric("Fear & Greed Index", f"{fg_index} / 100", delta=fg_status)
 
@@ -1102,9 +1200,12 @@ elif main_nav == "🌐 Markt & Zukunft":
                 st.metric("S&P 500 Haupttrend", f"{last_sp500:,.0f} Pkt.", delta=sp500_status)
 
             with col_m3:
-                if vix_level < 15: vix_status = "🟢 Entspannt"
-                elif vix_level < 25: vix_status = "🟡 Moderat"
-                else: vix_status = "🔴 Panik"
+                if vix_level < 15:
+                    vix_status = "🟢 Entspannt"
+                elif vix_level < 25:
+                    vix_status = "🟡 Moderat"
+                else:
+                    vix_status = "🔴 Panik"
                 st.metric("VIX Volatilität", f"{vix_level:.1f}", delta=vix_status)
 
             with col_m4:
@@ -1114,9 +1215,8 @@ elif main_nav == "🌐 Markt & Zukunft":
                 st.metric("DAX Index", f"{last_dax:,.0f} Pkt.", delta=dax_status)
 
             st.markdown("<br>", unsafe_allow_html=True)
-
             st.markdown("### 🔮 Makro-Zukunftsausblick")
-            
+
             if fg_index <= 25:
                 st.info("""
                 **Gesamtbild: EXTREME ANGST (Kaufchancen antizyklisch)**
@@ -1137,21 +1237,10 @@ elif main_nav == "🌐 Markt & Zukunft":
                 """)
 
             st.markdown("---")
-
             st.markdown("### 📊 Sektor-Rotation (Performance 1 Monat)")
-            
-            sector_data = []
-            for name, ticker_sym in SECTOR_ETFS.items():
-                try:
-                    sec_hist = yf.Ticker(ticker_sym).history(period="1mo")
-                    if not sec_hist.empty:
-                        change_1m = ((sec_hist['Close'].iloc[-1] - sec_hist['Close'].iloc[0]) / sec_hist['Close'].iloc[0]) * 100
-                        sector_data.append({"Sektor": name, "Performance (%)": change_1m})
-                except Exception: pass
 
             if sector_data:
                 df_sectors = pd.DataFrame(sector_data).sort_values(by="Performance (%)", ascending=False)
-                
                 fig_sec = go.Figure(go.Bar(
                     x=df_sectors['Performance (%)'],
                     y=df_sectors['Sektor'],
